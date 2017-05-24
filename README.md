@@ -19,7 +19,7 @@ If you use this toolbox as part of a research project, please cite the correspon
 ```yaml
 @inproceedings{wu2017cvprw,
   title={Kernalised Multi-resolution Convnet for Visual Tracking},
-  author={Wu, Di and Shao, Ling},
+  author={Wu, Di and Wenbin, Zou and Xia, Li and Yong, Zhao},
   booktitle={Proc. Conference on Computer Vision and Pattern Recognition (CVPR) Workshop},
   year={2017}
 }
@@ -31,6 +31,7 @@ Dependency: Keras
 -------
 Some dependent libraries requirements:
 Keras: for deep learning libarary:  https://github.com/fchollet/keras
+Backend: tensorflow
 
 	
 Test
@@ -41,9 +42,9 @@ To reproduce the experimental result for test submission, there is a Python file
 
 Train
 -------
-To train the network, you first need to extract the skeleton information
+To train the network, you first need to extract the CNN from the OTB2015:
 
-1)`...py`
+1)`step_1_OTB_100_collect_CNN.py`
 
 Voila, here you go.
 

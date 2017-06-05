@@ -1,13 +1,17 @@
 """
-This is a python reimplementation of the open source tracker in
-High-Speed Tracking with Kernelized Correlation Filters
-Joao F. Henriques, Rui Caseiro, Pedro Martins, and Jorge Batista, tPAMI 2015
-modified by Di Wu
+This is a python reimplementation of the paper
+@inproceedings{wu2017cvprw,
+  title={Kernalised Multi-resolution Convnet for Visual Tracking},
+  author={Wu, Di and Wenbin, Zou and Xia, Li and Yong, Zhao},
+  booktitle={Proc. Conference on Computer Vision and Pattern Recognition (CVPR) Workshop},
+  year={2017}
+}
+author: DI WU
+email: stevenwudi@gmail.com
+2017/06/05
 """
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy.misc import imresize
-import cv2
 import keras
 
 
@@ -17,7 +21,9 @@ class KMCTracker:
                  model_path='./trained_models/CNN_Model_OBT100_multi_cnn_final.h5',
                  feature_bandwidth_sigma=0.2,
                  spatial_bandwidth_sigma_factor=float(1/16.),
+                 adaptation_rate_scale_range_max=0.025,
                  adaptation_rate_range_max=0.0025,
+                 sub_feature_type="",
                  sub_sub_feature_type="",
                  padding=2.2,
                  lambda_value=1e-4):
@@ -56,6 +62,8 @@ class KMCTracker:
         self.first_target_sz = []
         self.currentScaleFactor = 1
         self.model_proto = model_proto
+        self.adaptation_rate_scale_range_max = adaptation_rate_scale_range_max
+        self.sub_feature_type = sub_feature_type
         self.sub_sub_feature_type = sub_sub_feature_type
 
         # following is set according to Table 2:
@@ -105,8 +113,34 @@ class KMCTracker:
                     import models.CNN
                     self.multi_cnn_model = getattr(models.CNN, self.model_proto)()
                     self.multi_cnn_model.load_weights(model_path)
+        if self.sub_feature_type == 'dsst':
+            # this method adopts from the paper  Martin Danelljan, Gustav Hger, Fahad Shahbaz Khan and Michael Felsberg.
+            # "Accurate Scale Estimation for Robust Visual Tracking". (BMVC), 2014.
+            # The project website is: http: // www.cvl.isy.liu.se / research / objrec / visualtracking / index.html
+            self.scale_step = 1.01
+            self.nScales = 33
+            self.scaleFactors = self.scale_step ** (np.ceil(self.nScales * 1.0 / 2) - range(1, self.nScales + 1))
+            self.scale_window = np.hanning(self.nScales*6+1)[self.nScales+33/2+2:self.nScales*5-33/2:3]
+            self.scale_sigma_factor = 1. / 4
+            self.scale_sigma = self.nScales / np.sqrt(self.nScales) * self.scale_sigma_factor
+            self.ys = np.exp(
+                -0.5 * ((range(1, self.nScales + 1) - np.ceil(self.nScales * 1.0 / 2)) ** 2) / self.scale_sigma ** 2)
+            self.ysf = np.fft.fft(self.ys)
+            self.min_scale_factor = []
+            self.max_scale_factor = []
+            self.xs = []
+            self.xsf = []
+            self.sf_num = []
+            self.sf_den = []
+            # we use linear kernel as in the BMVC2014 paper
+            self.new_sf_num = []
+            self.new_sf_den = []
+            self.scale_response = []
+            self.lambda_scale = 1e-2
+            self.adaptation_rate_scale = adaptation_rate_scale_range_max
 
         self.name = "KMC_" + self.feature_type
+        self.name = "KMC_" + self.sub_feature_type
 
     def train(self, im, init_rect):
         """
@@ -133,6 +167,17 @@ class KMCTracker:
         for i in range(len(self.x)):
             k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, self.xf[i], self.x[i])
             self.alphaf.append(np.divide(self.yf[i], self.fft2(k) + self.lambda_value))
+
+        if self.sub_feature_type == 'dsst':
+            self.min_scale_factor = self.scale_step ** (
+            np.ceil(np.log(max(5. / self.patch_size)) / np.log(self.scale_step)))
+            self.max_scale_factor = self.scale_step ** (
+            np.log(min(np.array(self.im_sz[:2]).astype(float) / self.target_sz)) / np.log(self.scale_step))
+            self.xs = self.get_scale_sample(im, self.currentScaleFactor * self.scaleFactors)
+            self.xsf = np.fft.fftn(self.xs, axes=[0])
+            # we use linear kernel as in the BMVC2014 paper
+            self.sf_num = np.multiply(self.ysf[:, None], np.conj(self.xsf))
+            self.sf_den = np.real(np.sum(np.multiply(self.xsf, np.conj(self.xsf)), axis=1))
 
     def detect(self, im):
         """
@@ -177,7 +222,30 @@ class KMCTracker:
         ##################################################################################
         # we need to train the tracker again here, it's almost the replicate of train
         ##################################################################################
+        # we update the scale from here
+        if self.sub_feature_type == 'dsst':
+            xs = self.get_scale_sample(im, self.currentScaleFactor * self.scaleFactors)
+            xsf = np.fft.fftn(xs, axes=[0])
+            # calculate the correlation response of the scale filter
+            scale_response_fft = np.divide(np.multiply(self.sf_num, xsf),
+                                           (self.sf_den[:, None] + self.lambda_scale))
+            scale_reponse = np.real(np.fft.ifftn(np.sum(scale_response_fft, axis=1)))
+            recovered_scale = np.argmax(scale_reponse)
+            # update the scale
+            self.currentScaleFactor *= self.scaleFactors[recovered_scale]
+            if self.currentScaleFactor < self.min_scale_factor:
+                self.currentScaleFactor = self.min_scale_factor
+            elif self.currentScaleFactor > self.max_scale_factor:
+                self.currentScaleFactor = self.max_scale_factor
+            # we only update the target size here.
+            new_target_sz = np.multiply(self.currentScaleFactor, self.first_target_sz)
+            self.pos -= (new_target_sz-self.target_sz)/2
+            self.target_sz = new_target_sz
+            self.patch_size = np.multiply(self.target_sz, (1 + self.padding))
+
+        ###############################
         # we update the model from here
+        ###############################
         self.im_crop = self.get_subwindow(im, self.pos, self.patch_size)
         x_new = self.get_features()
         xf_new = self.fft2(x_new)
@@ -188,6 +256,15 @@ class KMCTracker:
             self.x[i] = (1 - self.adaptation_rate) * self.x[i] + self.adaptation_rate * x_new[i]
             self.xf[i] = (1 - self.adaptation_rate) * self.xf[i] + self.adaptation_rate * xf_new[i]
             self.alphaf[i] = (1 - self.adaptation_rate) * self.alphaf[i] + self.adaptation_rate * alphaf_new
+
+        if self.sub_feature_type == 'dsst':
+            xs = self.get_scale_sample(im, self.currentScaleFactor * self.scaleFactors)
+            xsf = np.fft.fftn(xs, axes=[0])
+            # we use linear kernel as in the BMVC2014 paper
+            new_sf_num = np.multiply(self.ysf[:, None], np.conj(xsf))
+            new_sf_den = np.real(np.sum(np.multiply(xsf, np.conj(xsf)), axis=1))
+            self.sf_num = (1 - self.adaptation_rate_scale) * self.sf_num + self.adaptation_rate_scale * new_sf_num
+            self.sf_den = (1 - self.adaptation_rate_scale) * self.sf_den + self.adaptation_rate_scale * new_sf_den
 
         # we also require the bounding box to be within the image boundary
         self.res.append([min(self.im_sz[1] - self.target_sz[1], max(0, self.pos[1] - self.target_sz[1] / 2.)),
@@ -382,6 +459,22 @@ class KMCTracker:
         if not (self.sub_feature_type=="" or self.feature_correlation is None):
             features = np.multiply(features, self.feature_correlation[None, None, :])
         return features
+
+    def get_scale_sample(self, im, scaleFactors):
+        from pyhog import pyhog
+        resized_im_array = []
+        for i, s in enumerate(scaleFactors):
+            patch_sz = np.floor(self.first_target_sz * s)
+            im_patch = self.get_subwindow(im, self.pos, patch_sz)  # extract image
+            # because the hog output is (dim/4)-2>1:
+            if self.first_target_sz.min() < 12:
+                scale_up_factor = 12. / np.min(self.first_target_sz)
+                im_patch_resized = imresize(im_patch, np.asarray(self.first_target_sz * scale_up_factor).astype('int'))
+            else:
+                im_patch_resized = imresize(im_patch, self.first_target_sz)  #resize image to model size
+            features_hog = pyhog.features_pedro(im_patch_resized.astype(np.float64)/255.0, 4)
+            resized_im_array.append(np.multiply(features_hog.flatten(), self.scale_window[i]))
+        return np.asarray(resized_im_array)
 
     def train_cnn(self, frame, im, init_rect, img_rgb_next, next_rect, x_train, y_train, count):
 

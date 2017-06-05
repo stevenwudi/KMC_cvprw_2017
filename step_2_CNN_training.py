@@ -13,7 +13,7 @@ def main():
 
     # construct the model here (pre-defined model)
     model = cnn_hiararchical_batchnormalisation()
-    model.load_weights('./checkpoints/weights.02-0.01.hdf5')
+    model.load_weights('./checkpoints/weights.14-0.0047.hdf5')
 
     print(model.summary())
 

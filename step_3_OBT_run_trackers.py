@@ -14,7 +14,8 @@ from scripts import butil
 from scripts.model.result import Result
 from keras.preprocessing import image
 from scripts.visualisation_utils import plot_tracking_rect, show_precision
-OVERWRITE_RESULT = True
+OVERWRITE_RESULT = DEBUG = True
+DEBUG = True
 
 
 class Tracker:
@@ -28,8 +29,9 @@ if OVERWRITE_RESULT:
 def main(argv):
     if OVERWRITE_RESULT:
         trackers = [KMCTracker(feature_type='multi_cnn',
+                               sub_feature_type='dsst',
                                model_proto='cnn_hiararchical_batchnormalisation',
-                               model_path='./checkpoints/weights.12-0.0049.hdf5',
+                               model_path='./checkpoints/weights.14-0.0047.hdf5',
                                adaptation_rate_range_max=0.0025)]
     else:
         trackers = [Tracker(name='KMC')]
@@ -107,7 +109,7 @@ def run_trackers(trackers, seqs, evalType):
     ##################################################
     # chose sequence to run from below
     ##################################################
-    for idxSeq in range(0, numSeq):
+    for idxSeq in range(2, numSeq):
         s = seqs[idxSeq]
         subSeqs, subAnno = butil.get_sub_seqs(s, 20.0, evalType)
 
@@ -130,7 +132,7 @@ def run_trackers(trackers, seqs, evalType):
                 subS = subSeqs[idx]
                 subS.name = s.name + '_' + str(idx)
                 ####################
-                t, res = run_KCF_variant(t, subS, debug=True)
+                t, res = run_KCF_variant(t, subS)
                 ####################
                 r = Result(t.name, s.name, subS.startFrame, subS.endFrame,
                            res['type'], evalType, res['res'], res['fps'], None)
@@ -150,7 +152,7 @@ def run_trackers(trackers, seqs, evalType):
     return trackerResults
 
 
-def run_KCF_variant(tracker, seq, debug=False):
+def run_KCF_variant(tracker, seq):
     start_time = time.time()
     start_frame = 0
     tracker.res = []
@@ -164,7 +166,7 @@ def run_KCF_variant(tracker, seq, debug=False):
         else:
             tracker.detect(img_rgb)
 
-        if debug and frame > start_frame:
+        if DEBUG and frame > start_frame:
             print("Frame ==", frame)
             print('horiz_delta: %.2f, vert_delta: %.2f' % (tracker.horiz_delta, tracker.vert_delta))
             print("pos", np.array(tracker.res[-1]).astype(int))
@@ -176,7 +178,7 @@ def run_KCF_variant(tracker, seq, debug=False):
     tracker.fps = len(tracker.res) / total_time
     print("Frames-per-second:", tracker.fps)
 
-    if debug:
+    if DEBUG:
         tracker.precisions = show_precision(np.array(tracker.res), np.array(seq.gtRect), seq.name)
 
     res = {'type': 'rect', 'res': tracker.res, 'fps': tracker.fps}

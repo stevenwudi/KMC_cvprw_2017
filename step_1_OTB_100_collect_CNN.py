@@ -17,8 +17,7 @@ from KMC import KMCTracker
 
 
 def main(argv):
-    trackers = [KMCTracker(feature_type='multi_cnn', load_model=False)]
-    #evalTypes = ['OPE', 'SRE', 'TRE']
+    trackers = [KMCTracker(feature_type='multi_cnn')]
     evalTypes = ['OPE']
     loadSeqs = 'TB100'
     try:
@@ -69,10 +68,9 @@ def run_trackers(trackers, seqs, evalType):
     ##################################################
     # we also collect data fro training here
     import h5py
-    import keras
-    f = h5py.File("./data/OTB100_tensorflow_%d.hdf5", "w", driver="family", memb_size=2**32-1)
-    X_train = f.create_dataset("x_train", (80000, 5, 240, 160), dtype='uint8', chunks=True)
-    y_train = f.create_dataset("y_train", (80000, 4), dtype='float', chunks=True)
+    f = h5py.File("./data/OTB100_tensorflow_new_%d.hdf5", "w", driver="family", memb_size=2**32-1)
+    X_train = f.create_dataset("x_train", (80000, 5, 240, 160), dtype='float32', chunks=True)
+    y_train = f.create_dataset("y_train", (80000, 4), dtype='float32', chunks=True)
     count = 0
     for idxSeq in range(0, numSeq):
         s = seqs[idxSeq]
@@ -91,8 +89,6 @@ def run_trackers(trackers, seqs, evalType):
 
             seqLen = len(subSeqs)
             for idx in range(seqLen):
-                # print('{0}_{1}, {2}_{3}:{4}/{5} - {6}'.format(
-                #     idxTrk + 1, t.feature_type, idxSeq + 1, s.name, idx + 1, seqLen, evalType))
                 subS = subSeqs[idx]
                 subS.name = s.name + '_' + str(idx)
                 ####################
@@ -106,7 +102,6 @@ def run_trackers(trackers, seqs, evalType):
     f.close()
     print("done")
     # count 58940
-
     return trackerResults
 
 

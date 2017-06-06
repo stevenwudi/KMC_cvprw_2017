@@ -325,8 +325,7 @@ def plot_tracking_result(frame, img_rgb, result, gtRect, seqName,wait_second=0.5
     # figManager = plt.get_current_fig_manager()
     # figManager.window.showMaximized()
     # Because of PIL read image
-    if img_rgb.shape[0] == 3:
-        img_rgb = img_rgb.transpose(1, 2, 0)/255.
+    img_rgb = img_rgb/255.
 
     tracking_figure_axes = plt.subplot(111)
     tracking_rect = Rectangle(

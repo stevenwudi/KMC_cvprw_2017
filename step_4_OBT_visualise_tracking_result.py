@@ -7,35 +7,24 @@ import sys
 import os
 import time
 import numpy as np
+import json
 # some configurations files for OBT experiments, originally, I would never do that this way of importing,
 # it's simple way too ugly
 from config import SETUP_SEQ, RESULT_SRC, OVERWRITE_RESULT, SAVE_RESULT, SEQ_SRC
 from scripts import butil
 from scripts.model.result import Result
 from keras.preprocessing import image
-from scripts.visualisation_utils import plot_tracking_rect, show_precision
-OVERWRITE_RESULT = True
-DEBUG = True
+from scripts.visualisation_utils import plot_tracking_result
 
 
 class Tracker:
     def __init__(self, name=''):
         self.name = name
 
-if OVERWRITE_RESULT:
-    from KMC import KMCTracker
-
 
 def main(argv):
-    if OVERWRITE_RESULT:
-        trackers = [KMCTracker(feature_type='vgg',
-                               sub_feature_type='dsst',
-                               model_proto='cnn_hiararchical_batchnormalisation',
-                               model_path='./checkpoints/weights.14-0.0047.hdf5',
-                               adaptation_rate_range_max=0.0025)]
-    else:
-        trackers = [Tracker(name='KMC_multi_cnn')]
 
+    trackers = [Tracker(name='KMC_multi_cnn')]
     evalTypes = ['OPE']
     loadSeqs = 'TB100'
     try:
@@ -104,12 +93,11 @@ def run_trackers(trackers, seqs, evalType):
         os.makedirs(tmpRes_path)
 
     numSeq = len(seqs)
-
     trackerResults = dict((t, list()) for t in trackers)
     ##################################################
     # chose sequence to run from below
     ##################################################
-    for idxSeq in range(0, numSeq):
+    for idxSeq in range(12, numSeq):
         s = seqs[idxSeq]
         subSeqs, subAnno = butil.get_sub_seqs(s, 20.0, evalType)
 
@@ -124,66 +112,55 @@ def run_trackers(trackers, seqs, evalType):
                     seqResults = butil.load_seq_result(evalType, t, s.name)
                     trackerResults[t].append(seqResults)
                     continue
-            seqResults = []
             seqLen = len(subSeqs)
             for idx in range(seqLen):
-                print('{0}_{1}, {2}_{3}:{4}/{5} - {6}'.format(
-                    idxTrk + 1, t.name, idxSeq + 1, s.name, idx + 1, seqLen, evalType))
                 subS = subSeqs[idx]
                 subS.name = s.name + '_' + str(idx)
-                ####################
-                t, res = run_KCF_variant(t, subS)
-                ####################
-                r = Result(t.name, s.name, subS.startFrame, subS.endFrame,
-                           res['type'], evalType, res['res'], res['fps'], None)
-                try:
-                    r.tmplsize = res['tmplsize'][0]
-                except:
-                    pass
-                r.refresh_dict()
-                seqResults.append(r)
-            # end for subseqs
-            if SAVE_RESULT:
-                butil.save_seq_result(seqResults)
 
-            trackerResults[t].append(seqResults)
+                ####################
+                r_temp = Result(t.name, s.name, subS.startFrame, subS.endFrame, [], evalType, [], [], None)
+                t, res = run_KCF_variant(t, subS, r_temp)
+                return 0
+                ####################
             # end for tracker
     # end for allseqs
     return trackerResults
 
 
-def run_KCF_variant(tracker, seq):
+def run_KCF_variant(tracker, seq, r_temp):
     start_time = time.time()
     start_frame = 0
     tracker.res = []
+
+    src = RESULT_SRC.format('OPE') + tracker.name
+    if os.path.exists(os.path.join(src, r_temp.seqName+'.json')):
+        json_file = os.path.join(src, r_temp.seqName+'.json')
+    else:
+        json_file = os.path.join(src, (r_temp.seqName+'.json').lower())
+
+    with open(json_file) as json_data:
+        result = json.load(json_data)
+        if type(result) == list:
+            result = result[0]
+
     for frame in range(start_frame, seq.endFrame - seq.startFrame+1):
         image_filename = seq.s_frames[frame]
         image_path = os.path.join(seq.path, image_filename)
         img_rgb = image.load_img(image_path)
         img_rgb = image.img_to_array(img_rgb)
-        if frame == start_frame:
-            tracker.train(img_rgb, seq.gtRect[start_frame])
-        else:
-            tracker.detect(img_rgb)
 
-        if DEBUG and frame > start_frame:
+        if frame > start_frame:
             print("Frame ==", frame)
-            print('horiz_delta: %.2f, vert_delta: %.2f' % (tracker.horiz_delta, tracker.vert_delta))
-            print("pos", np.array(tracker.res[-1]).astype(int))
+            print("pos", np.array(result['res'][frame-1]).astype(int))
             print("gt", seq.gtRect[frame])
             print("\n")
-            plot_tracking_rect(seq.name, frame + seq.startFrame, img_rgb, tracker, seq.gtRect)
+            plot_tracking_result(frame + seq.startFrame, img_rgb, result, seq.gtRect, r_temp.seqName, wait_second=0.1)
 
     total_time = time.time() - start_time
     tracker.fps = len(tracker.res) / total_time
     print("Frames-per-second:", tracker.fps)
 
-    if DEBUG:
-        tracker.precisions = show_precision(np.array(tracker.res), np.array(seq.gtRect), seq.name)
-
-    res = {'type': 'rect', 'res': tracker.res, 'fps': tracker.fps}
-
-    return tracker, res
+    return tracker, []
 
 if __name__ == "__main__":
     main(sys.argv[1:])

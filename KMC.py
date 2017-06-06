@@ -26,7 +26,8 @@ class KMCTracker:
                  sub_feature_type="",
                  sub_sub_feature_type="",
                  padding=2.2,
-                 lambda_value=1e-4):
+                 lambda_value=1e-4,
+                 sigma_coff=2):
         """
         object_example is an image showing the object to track
         feature_type:
@@ -63,6 +64,7 @@ class KMCTracker:
         self.currentScaleFactor = 1
         self.model_proto = model_proto
         self.adaptation_rate_scale_range_max = adaptation_rate_scale_range_max
+        self.feature_bandwidth_sigma = feature_bandwidth_sigma
         self.sub_feature_type = sub_feature_type
         self.sub_sub_feature_type = sub_sub_feature_type
 
@@ -86,7 +88,6 @@ class KMCTracker:
             self.cell_size = 4
             self.response_size = [self.resize_size[0] / self.cell_size,
                                   self.resize_size[1] / self.cell_size]
-            self.feature_bandwidth_sigma = feature_bandwidth_sigma
             self.adaptation_rate = adaptation_rate_range_max
             self.stability = np.ones(5)
             # store pre-computed cosine window, here is a multiscale CNN, here we have 5 layers cnn:
@@ -95,7 +96,7 @@ class KMCTracker:
             self.yf = []
             self.response_all = []
             self.max_list = []
-            self.feature_bandwidth_sigma = feature_bandwidth_sigma
+            self.sigma_coff = sigma_coff
 
             for i in range(5):
                 cos_wind_sz = np.divide(self.resize_size, 2**i)
@@ -113,6 +114,24 @@ class KMCTracker:
                     import models.CNN
                     self.multi_cnn_model = getattr(models.CNN, self.model_proto)()
                     self.multi_cnn_model.load_weights(model_path)
+
+        elif self.feature_type == 'vgg':
+            from keras.applications.vgg19 import VGG19
+            from keras.models import Model
+            self.base_model = VGG19(include_top=False, weights='imagenet')
+            self.vgg_layer = 'block2_conv2'
+            self.extract_model = Model(input=self.base_model.input,
+                                       output=self.base_model.get_layer(self.vgg_layer).output)
+            if self.vgg_layer == 'block3_conv4':
+                self.cell_size = 4
+            elif self.vgg_layer == 'block2_conv2':
+                self.cell_size = 2
+            elif self.vgg_layer == 'block1_conv2':
+                self.cell_size = 1
+
+            self.feature_bandwidth_sigma = feature_bandwidth_sigma * self.cell_size
+            self.adaptation_rate = 0.01
+
         if self.sub_feature_type == 'dsst':
             # this method adopts from the paper  Martin Danelljan, Gustav Hger, Fahad Shahbaz Khan and Michael Felsberg.
             # "Accurate Scale Estimation for Robust Visual Tracking". (BMVC), 2014.
@@ -140,7 +159,7 @@ class KMCTracker:
             self.adaptation_rate_scale = adaptation_rate_scale_range_max
 
         self.name = "KMC_" + self.feature_type
-        self.name = "KMC_" + self.sub_feature_type
+        self.name += "_" + self.sub_feature_type
 
     def train(self, im, init_rect):
         """
@@ -161,12 +180,28 @@ class KMCTracker:
         # desired output (gaussian shaped), bandwidth proportional to target size
         self.im_sz = im.shape[:2]
         self.im_crop = self.get_subwindow(im, self.pos, self.patch_size)
+
+        if self.feature_type == 'vgg':
+            grid_y = np.arange(np.floor(self.patch_size[0]/self.cell_size)) - np.floor(self.patch_size[0]/(2*self.cell_size))
+            grid_x = np.arange(np.floor(self.patch_size[1]/self.cell_size)) - np.floor(self.patch_size[1]/(2*self.cell_size))
+            rs, cs = np.meshgrid(grid_x, grid_y)
+            self.output_sigma = np.sqrt(np.prod(self.target_sz)) * self.spatial_bandwidth_sigma_factor
+            self.y = np.exp(-0.5 / self.output_sigma ** 2 * (rs ** 2 + cs ** 2))
+            self.yf = self.fft2(self.y)
+            # store pre-computed cosine window
+            self.cos_window = np.outer(np.hanning(self.yf.shape[0]), np.hanning(self.yf.shape[1]))
+
         self.x = self.get_features()
         self.xf = self.fft2(self.x)
         self.alphaf = []
-        for i in range(len(self.x)):
-            k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, self.xf[i], self.x[i])
-            self.alphaf.append(np.divide(self.yf[i], self.fft2(k) + self.lambda_value))
+
+        if self.feature_type == 'multi_cnn':
+            for i in range(len(self.x)):
+                k = self.dense_gauss_kernel(self.feature_bandwidth_sigma*(self.sigma_coff**i), self.xf[i], self.x[i])
+                self.alphaf.append(np.divide(self.yf[i], self.fft2(k) + self.lambda_value))
+        elif self.feature_type == 'vgg':
+            k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, self.xf, self.x)
+            self.alphaf = np.divide(self.yf, self.fft2(k) + self.lambda_value)
 
         if self.sub_feature_type == 'dsst':
             self.min_scale_factor = self.scale_step ** (
@@ -194,30 +229,42 @@ class KMCTracker:
         self.im_crop = self.get_subwindow(im, self.pos, self.patch_size)
         z = self.get_features()
         zf = self.fft2(z)
-        self.response = []
-        for i in range(len(z)):
-            k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, self.xf[i], self.x[i], zf[i], z[i])
+
+        if self.feature_type == 'multi_cnn':
+            self.response = []
+            for i in range(len(z)):
+                k = self.dense_gauss_kernel(self.feature_bandwidth_sigma * (self.sigma_coff**i), self.xf[i], self.x[i], zf[i], z[i])
+                kf = self.fft2(k)
+                self.response.append(np.real(np.fft.ifft2(np.multiply(self.alphaf[i], kf))))
+
+            response_all = np.zeros(shape=(5, self.resize_size[0], self.resize_size[1]))
+            self.max_list = [np.max(x) for x in self.response]
+            for i in range(len(self.response)):
+                response_all[i, :, :] = imresize(self.response[i], size=self.resize_size)
+                response_all[i, :, :] *= self.max_list[i]
+            self.response_all = response_all.astype('float32') / 255.
+
+            # prediction
+            inputs = []
+            for x in self.response:
+                inputs.append(np.expand_dims(np.expand_dims(np.array(x).astype('float32'), 0), 3))
+            pos_move = self.multi_cnn_model.predict(inputs)
+
+            self.vert_delta, self.horiz_delta = [self.target_sz[0] * pos_move[0][0], self.target_sz[1] * pos_move[0][1]]
+            self.pos = [self.pos[0] + self.target_sz[0] * pos_move[0][0],
+                        self.pos[1] + self.target_sz[1] * pos_move[0][1]]
+            self.pos = [max(self.target_sz[0] / 2, min(self.pos[0], self.im_sz[0] - self.target_sz[0] / 2)),
+                        max(self.target_sz[1] / 2, min(self.pos[1], self.im_sz[1] - self.target_sz[1] / 2))]
+
+        elif self.feature_type == 'vgg':
+            k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, self.xf, self.x, zf, z)
             kf = self.fft2(k)
-            self.response.append(np.real(np.fft.ifft2(np.multiply(self.alphaf[i], kf))))
+            self.response = np.real(np.fft.ifft2(np.multiply(self.alphaf, kf)))
 
-        response_all = np.zeros(shape=(5, self.resize_size[0], self.resize_size[1]))
-        self.max_list = [np.max(x) for x in self.response]
-        for i in range(len(self.response)):
-            response_all[i, :, :] = imresize(self.response[i], size=self.resize_size)
-            response_all[i, :, :] *= self.max_list[i]
-        self.response_all = response_all.astype('float32') / 255.
-
-        # prediction
-        inputs = []
-        for x in self.response:
-            inputs.append(np.expand_dims(np.expand_dims(np.array(x).astype('float32'), 0), 3))
-        pos_move = self.multi_cnn_model.predict(inputs)
-
-        self.vert_delta, self.horiz_delta = [self.target_sz[0] * pos_move[0][0], self.target_sz[1] * pos_move[0][1]]
-        self.pos = [self.pos[0] + self.target_sz[0] * pos_move[0][0],
-                    self.pos[1] + self.target_sz[1] * pos_move[0][1]]
-        self.pos = [max(self.target_sz[0] / 2, min(self.pos[0], self.im_sz[0] - self.target_sz[0] / 2)),
-                    max(self.target_sz[1] / 2, min(self.pos[1], self.im_sz[1] - self.target_sz[1] / 2))]
+            v_centre, h_centre = np.unravel_index(self.response.argmax(), self.response.shape)
+            self.vert_delta, self.horiz_delta = [v_centre - self.response.shape[0] / 2,
+                                                 h_centre - self.response.shape[1] / 2]
+            self.pos = self.pos + np.dot(self.cell_size, [self.vert_delta, self.horiz_delta])
 
         ##################################################################################
         # we need to train the tracker again here, it's almost the replicate of train
@@ -249,13 +296,22 @@ class KMCTracker:
         self.im_crop = self.get_subwindow(im, self.pos, self.patch_size)
         x_new = self.get_features()
         xf_new = self.fft2(x_new)
-        for i in range(len(x_new)):
-            k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, xf_new[i], x_new[i])
+        if self.feature_type == 'multi_cnn':
+            for i in range(len(x_new)):
+                k = self.dense_gauss_kernel(self.feature_bandwidth_sigma * (self.sigma_coff**i), xf_new[i], x_new[i])
+                kf = self.fft2(k)
+                alphaf_new = np.divide(self.yf[i], kf + self.lambda_value)
+                self.x[i] = (1 - self.adaptation_rate) * self.x[i] + self.adaptation_rate * x_new[i]
+                self.xf[i] = (1 - self.adaptation_rate) * self.xf[i] + self.adaptation_rate * xf_new[i]
+                self.alphaf[i] = (1 - self.adaptation_rate) * self.alphaf[i] + self.adaptation_rate * alphaf_new
+
+        elif self.feature_type == 'vgg':
+            k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, self.xf, self.x)
             kf = self.fft2(k)
-            alphaf_new = np.divide(self.yf[i], kf + self.lambda_value)
-            self.x[i] = (1 - self.adaptation_rate) * self.x[i] + self.adaptation_rate * x_new[i]
-            self.xf[i] = (1 - self.adaptation_rate) * self.xf[i] + self.adaptation_rate * xf_new[i]
-            self.alphaf[i] = (1 - self.adaptation_rate) * self.alphaf[i] + self.adaptation_rate * alphaf_new
+            alphaf_new = np.divide(self.yf, kf + self.lambda_value)
+            self.x = (1 - self.adaptation_rate) * self.x + self.adaptation_rate * x_new
+            self.xf = (1 - self.adaptation_rate) * self.xf + self.adaptation_rate * xf_new
+            self.alphaf = (1 - self.adaptation_rate) * self.alphaf + self.adaptation_rate * alphaf_new
 
         if self.sub_feature_type == 'dsst':
             xs = self.get_scale_sample(im, self.currentScaleFactor * self.scaleFactors)
@@ -408,11 +464,16 @@ class KMCTracker:
                 from keras.applications.vgg19 import preprocess_input
             elif self.feature_type == 'resnet50':
                 from keras.applications.resnet50 import preprocess_input
-            x = np.expand_dims(self.im_crop.copy(), axis=0)
+            if self.im_crop.shape[0] != self.first_patch_sz[0] or self.im_crop.shape[1] != self.first_patch_sz[1]:
+                x = imresize(self.im_crop.copy(), self.first_patch_sz)
+                x = np.array(x).astype(np.float64)
+            else:
+                x = self.im_crop.copy()
+            x = np.expand_dims(x, axis=0)
             x = preprocess_input(x)
             features = self.extract_model.predict(x)
             features = np.squeeze(features)
-            features = (features.transpose(1, 2, 0) - features.min()) / (features.max() - features.min())
+            features = (features - features.min()) / (features.max() - features.min())
             features = np.multiply(features, self.cos_window[:, :, None])
 
         elif self.feature_type == 'vgg_rnn' or self.feature_type=='cnn':
@@ -456,8 +517,6 @@ class KMCTracker:
         else:
             assert 'Non implemented!'
 
-        if not (self.sub_feature_type=="" or self.feature_correlation is None):
-            features = np.multiply(features, self.feature_correlation[None, None, :])
         return features
 
     def get_scale_sample(self, im, scaleFactors):
@@ -495,7 +554,7 @@ class KMCTracker:
             self.xf = self.fft2(self.x)
             self.alphaf = []
             for i in range(len(self.x)):
-                k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, self.xf[i], self.x[i])
+                k = self.dense_gauss_kernel(self.feature_bandwidth_sigma*(self.sigma_coff**i), self.xf[i], self.x[i])
                 self.alphaf.append(np.divide(self.yf[i], self.fft2(k) + self.lambda_value))
 
         ###################### Next frame #####################################
@@ -506,7 +565,7 @@ class KMCTracker:
         #print(time.clock() - t0, "Feature process time")
         self.response = []
         for i in range(len(z)):
-            k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, self.xf[i], self.x[i], zf[i], z[i])
+            k = self.dense_gauss_kernel(self.feature_bandwidth_sigma*(self.sigma_coff**i), self.xf[i], self.x[i], zf[i], z[i])
             kf = self.fft2(k)
             self.response.append(np.real(np.fft.ifft2(np.multiply(self.alphaf[i], kf))))
 
@@ -518,7 +577,7 @@ class KMCTracker:
         x_new = self.get_features()
         xf_new = self.fft2(x_new)
         for i in range(len(x_new)):
-            k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, xf_new[i], x_new[i])
+            k = self.dense_gauss_kernel(self.feature_bandwidth_sigma*(2**i), xf_new[i], x_new[i])
             kf = self.fft2(k)
             alphaf_new = np.divide(self.yf[i], kf + self.lambda_value)
             self.x[i] = (1 - self.adaptation_rate) * self.x[i] + self.adaptation_rate * x_new[i]

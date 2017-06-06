@@ -30,7 +30,7 @@ def save_scores(scoreList, testname=None):
     if not os.path.exists(scoreSrc):
         os.makedirs(scoreSrc)
     for score in scoreList:
-        if score.tracker.name[:3] == 'KCF':
+        if score.tracker.name[:3] == 'KMC':
             score.tracker = score.tracker.name
             # the following two attributes can not be copied, we need to delete them
             # if hasattr(score.tracker, 'extract_model'):

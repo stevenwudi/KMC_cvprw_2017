@@ -33,8 +33,8 @@ def main(argv):
                                model_path='./trained_models/CNN_Model_OBT100_multi_cnn_best_cifar_big_valid.h5',
                                adaptation_rate_range_max=0.0025,
                                adaptation_rate_scale_range_max=0.005,
-                               padding=2.2)]
-        #  sub_sub_feature_type='adapted_lr_hdt',
+                               padding=2.2,
+                               sub_sub_feature_type='adapted_lr_hdt')]
     else:
         trackers = [Tracker(name='KMC_multi_cnn')]
 

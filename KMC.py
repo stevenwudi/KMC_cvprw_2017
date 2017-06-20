@@ -28,6 +28,7 @@ class KMCTracker:
                  padding=2.2,
                  lambda_value=1e-4,
                  sigma_coff=2,
+                 acc_time=5,
                  name_suffix="",
                  cnn_type=""):
         """
@@ -160,6 +161,20 @@ class KMCTracker:
             self.scale_response = []
             self.lambda_scale = 1e-2
             self.adaptation_rate_scale = adaptation_rate_scale_range_max
+
+        if sub_sub_feature_type == 'adapted_lr' or sub_sub_feature_type == 'adapted_lr_hdt':
+            self.sub_sub_feature_type = sub_sub_feature_type
+            self.acc_time = acc_time
+            self.loss = np.zeros(shape=(self.acc_time, 5))
+            self.loss_mean = np.zeros(shape=(self.acc_time, 5))
+            self.loss_std = np.zeros(shape=(self.acc_time, 5))
+            self.adaptation_rate_range = [adaptation_rate_range_max, 0.0]
+            self.adaptation_rate_scale_range = [adaptation_rate_scale_range_max, 0.00]
+            self.adaptation_rate = self.adaptation_rate_range[0]
+            self.adaptation_rate_scale = self.adaptation_rate_scale_range[0]
+            self.stability = 1
+            if sub_sub_feature_type == 'adapted_lr_hdt':
+                self.adaptation_rate = np.ones(shape=(5)) * self.adaptation_rate_range[0]
 
         self.name = "KMC_" + self.feature_type
         self.name += "_" + self.sub_feature_type

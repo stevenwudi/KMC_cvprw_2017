@@ -161,7 +161,7 @@ class KMCTracker:
             self.lambda_scale = 1e-2
             self.adaptation_rate_scale = adaptation_rate_scale_range_max
 
-        if sub_sub_feature_type == 'adapted_lr_hdt':
+        if self.sub_sub_feature_type == 'adapted_lr_hdt':
             self.sub_sub_feature_type = sub_sub_feature_type
             self.acc_time = acc_time
             self.loss = np.zeros(shape=(self.acc_time, 5))
@@ -177,11 +177,13 @@ class KMCTracker:
             self.W = np.asarray([0.05, 0.1, 0.2, 0.5, 1])
             self.W = self.W / np.sum(self.W)
             self.R = np.zeros(shape=(len(self.W)))
-            self.loss = np.zeros(shape=(self.acc_time+1, len(self.W)))
+            self.loss = np.zeros(shape=(self.acc_time, len(self.W)))
 
         self.name = "KMC_" + self.feature_type
-        self.name += "_" + self.sub_feature_type
-        self.name += "_" + self.sub_sub_feature_type
+        if self.sub_feature_type:
+            self.name += "_" + self.sub_feature_type
+        if self.sub_sub_feature_type:
+            self.name += "_" + self.sub_sub_feature_type
         if name_suffix:
             self.name += "_" + name_suffix
 

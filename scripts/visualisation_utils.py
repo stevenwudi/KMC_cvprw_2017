@@ -115,7 +115,7 @@ def plot_tracking_rect(seqname, frame, img_rgb, tracker, gtRect, wait_second=0.0
     elif tracker.feature_type == 'multi_cnn' or tracker.feature_type == 'HDT':
         features = tracker.x[0].transpose(2, 0, 1) / tracker.x[0].max()
         plt.imshow(make_mosaic(features[:16], 4, 4, border=1))
-        plt.title('%s, FIRST conv layer output' % tracker.feature_type)
+        plt.title('%s, FIRST conv.' % tracker.feature_type)
         if tracker.sub_sub_feature_type == 'adapted_lr_hdt':
             plt.title("ALR: %s" % (', '.join("{0:.4f}".format(x) for x in tracker.adaptation_rate)))
     else:
@@ -125,7 +125,7 @@ def plot_tracking_rect(seqname, frame, img_rgb, tracker, gtRect, wait_second=0.0
     plt.subplot(224)
     if tracker.feature_type == 'multi_cnn':
         plt.imshow(make_mosaic(tracker.response_all[:5], 2, 3, border=5))
-        plt.title('response [%s]' % ', '.join("{0:.2f}".format(x) for x in tracker.max_list))
+        plt.title('Response [%s]' % ', '.join("{0:.2f}".format(x) for x in tracker.max_list))
     elif tracker.feature_type == 'HDT':
         plt.imshow(make_mosaic(tracker.response_all[:5], 2, 3, border=5))
         plt.title('R is: {0} \n W is: {1}'.format(', '.join("{0:.3f}".format(x) for x in tracker.max_list),

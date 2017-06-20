@@ -28,11 +28,13 @@ if OVERWRITE_RESULT:
 
 def main(argv):
     if OVERWRITE_RESULT:
-        trackers = [KMCTracker(feature_type='vgg',
+        trackers = [KMCTracker(feature_type='multi_cnn',
                                sub_feature_type='dsst',
-                               model_proto='cnn_hiararchical_batchnormalisation',
-                               model_path='./checkpoints/weights.14-0.0047.hdf5',
-                               adaptation_rate_range_max=0.0025)]
+                               model_path='./trained_models/CNN_Model_OBT100_multi_cnn_best_cifar_big_valid.h5',
+                               adaptation_rate_range_max=0.0025,
+                               adaptation_rate_scale_range_max=0.005,
+                               padding=2.2)]
+        #  sub_sub_feature_type='adapted_lr_hdt',
     else:
         trackers = [Tracker(name='KMC_multi_cnn')]
 
@@ -109,7 +111,7 @@ def run_trackers(trackers, seqs, evalType):
     ##################################################
     # chose sequence to run from below
     ##################################################
-    for idxSeq in range(0, numSeq):
+    for idxSeq in range(12, numSeq):
         s = seqs[idxSeq]
         subSeqs, subAnno = butil.get_sub_seqs(s, 20.0, evalType)
 

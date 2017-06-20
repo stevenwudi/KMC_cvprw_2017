@@ -13,21 +13,23 @@ email: stevenwudi@gmail.com
 import numpy as np
 from scipy.misc import imresize
 import keras
+from keras.models import load_model
 
 
 class KMCTracker:
     def __init__(self, feature_type='multi_cnn',
-                 model_proto=None,
-                 model_path='./trained_models/CNN_Model_OBT100_multi_cnn_final.h5',
+                 model_path='./trained_models/CNN_Model_OBT100_multi_cnn_best_cifar_big_valid.h5',
                  feature_bandwidth_sigma=0.2,
                  spatial_bandwidth_sigma_factor=float(1/16.),
-                 adaptation_rate_scale_range_max=0.025,
                  adaptation_rate_range_max=0.0025,
+                 adaptation_rate_scale_range_max=0.005,
                  sub_feature_type="",
                  sub_sub_feature_type="",
                  padding=2.2,
                  lambda_value=1e-4,
-                 sigma_coff=2):
+                 sigma_coff=2,
+                 name_suffix="",
+                 cnn_type=""):
         """
         object_example is an image showing the object to track
         feature_type:
@@ -62,11 +64,12 @@ class KMCTracker:
         self.first_patch_sz = []
         self.first_target_sz = []
         self.currentScaleFactor = 1
-        self.model_proto = model_proto
+        self.model_path = model_path
         self.adaptation_rate_scale_range_max = adaptation_rate_scale_range_max
         self.feature_bandwidth_sigma = feature_bandwidth_sigma
         self.sub_feature_type = sub_feature_type
         self.sub_sub_feature_type = sub_sub_feature_type
+        self.cnn_type = cnn_type
 
         # following is set according to Table 2:
         if self.feature_type == 'multi_cnn':
@@ -98,6 +101,9 @@ class KMCTracker:
             self.max_list = []
             self.sigma_coff = sigma_coff
 
+            # load trained KMC model here
+            self.multi_cnn_model = load_model(model_path)
+
             for i in range(5):
                 cos_wind_sz = np.divide(self.resize_size, 2**i)
                 self.cos_window.append(np.outer(np.hanning(cos_wind_sz[0]), np.hanning(cos_wind_sz[1])))
@@ -109,11 +115,6 @@ class KMCTracker:
                 y = np.exp(-0.5 / output_sigma ** 2 * (rs ** 2 + cs ** 2))
                 self.y.append(y)
                 self.yf.append(self.fft2(y))
-
-            if self.model_proto:
-                    import models.CNN
-                    self.multi_cnn_model = getattr(models.CNN, self.model_proto)()
-                    self.multi_cnn_model.load_weights(model_path)
 
         elif self.feature_type == 'vgg':
             from keras.applications.vgg19 import VGG19
@@ -139,7 +140,9 @@ class KMCTracker:
             self.scale_step = 1.01
             self.nScales = 33
             self.scaleFactors = self.scale_step ** (np.ceil(self.nScales * 1.0 / 2) - range(1, self.nScales + 1))
-            self.scale_window = np.hanning(self.nScales*6+1)[self.nScales+33/2+2:self.nScales*5-33/2:3]
+            #self.scale_window = np.hanning(self.nScales*6+1)[self.nScales+33/2+2:self.nScales*5-33/2:3]
+            self.scale_window = np.hanning(self.nScales)
+
             self.scale_sigma_factor = 1. / 4
             self.scale_sigma = self.nScales / np.sqrt(self.nScales) * self.scale_sigma_factor
             self.ys = np.exp(
@@ -160,6 +163,7 @@ class KMCTracker:
 
         self.name = "KMC_" + self.feature_type
         self.name += "_" + self.sub_feature_type
+        self.name += "_" + name_suffix
 
     def train(self, im, init_rect):
         """
@@ -197,7 +201,8 @@ class KMCTracker:
 
         if self.feature_type == 'multi_cnn':
             for i in range(len(self.x)):
-                k = self.dense_gauss_kernel(self.feature_bandwidth_sigma*(self.sigma_coff**i), self.xf[i], self.x[i])
+                #k = self.dense_gauss_kernel(self.feature_bandwidth_sigma*(self.sigma_coff**i), self.xf[i], self.x[i])
+                k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, self.xf[i], self.x[i])
                 self.alphaf.append(np.divide(self.yf[i], self.fft2(k) + self.lambda_value))
         elif self.feature_type == 'vgg':
             k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, self.xf, self.x)
@@ -233,7 +238,8 @@ class KMCTracker:
         if self.feature_type == 'multi_cnn':
             self.response = []
             for i in range(len(z)):
-                k = self.dense_gauss_kernel(self.feature_bandwidth_sigma * (self.sigma_coff**i), self.xf[i], self.x[i], zf[i], z[i])
+                #k = self.dense_gauss_kernel(self.feature_bandwidth_sigma * (self.sigma_coff**i), self.xf[i], self.x[i], zf[i], z[i])
+                k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, self.xf[i], self.x[i], zf[i], z[i])
                 kf = self.fft2(k)
                 self.response.append(np.real(np.fft.ifft2(np.multiply(self.alphaf[i], kf))))
 
@@ -241,14 +247,12 @@ class KMCTracker:
             self.max_list = [np.max(x) for x in self.response]
             for i in range(len(self.response)):
                 response_all[i, :, :] = imresize(self.response[i], size=self.resize_size)
-                response_all[i, :, :] *= self.max_list[i]
-            self.response_all = response_all.astype('float32') / 255.
+                #response_all[i, :, :] *= self.max_list[i]
 
-            # prediction
-            inputs = []
-            for x in self.response:
-                inputs.append(np.expand_dims(np.expand_dims(np.array(x).astype('float32'), 0), 3))
-            pos_move = self.multi_cnn_model.predict(inputs)
+            response_all = response_all.astype('float32') / 255. - 0.5
+            self.response_all = response_all
+            response_all = np.expand_dims(response_all, axis=0)
+            pos_move = self.multi_cnn_model.predict(response_all, batch_size=1)
 
             self.vert_delta, self.horiz_delta = [self.target_sz[0] * pos_move[0][0], self.target_sz[1] * pos_move[0][1]]
             self.pos = [self.pos[0] + self.target_sz[0] * pos_move[0][0],
@@ -298,7 +302,8 @@ class KMCTracker:
         xf_new = self.fft2(x_new)
         if self.feature_type == 'multi_cnn':
             for i in range(len(x_new)):
-                k = self.dense_gauss_kernel(self.feature_bandwidth_sigma * (self.sigma_coff**i), xf_new[i], x_new[i])
+                #k = self.dense_gauss_kernel(self.feature_bandwidth_sigma * (self.sigma_coff**i), xf_new[i], x_new[i])
+                k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, xf_new[i], x_new[i])
                 kf = self.fft2(k)
                 alphaf_new = np.divide(self.yf[i], kf + self.lambda_value)
                 self.x[i] = (1 - self.adaptation_rate) * self.x[i] + self.adaptation_rate * x_new[i]
@@ -577,7 +582,7 @@ class KMCTracker:
         x_new = self.get_features()
         xf_new = self.fft2(x_new)
         for i in range(len(x_new)):
-            k = self.dense_gauss_kernel(self.feature_bandwidth_sigma*(2**i), xf_new[i], x_new[i])
+            k = self.dense_gauss_kernel(self.feature_bandwidth_sigma*(self.sigma_coff**i), xf_new[i], x_new[i])
             kf = self.fft2(k)
             alphaf_new = np.divide(self.yf[i], kf + self.lambda_value)
             self.x[i] = (1 - self.adaptation_rate) * self.x[i] + self.adaptation_rate * x_new[i]

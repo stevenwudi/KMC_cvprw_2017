@@ -14,8 +14,8 @@ from scripts import butil
 from scripts.model.result import Result
 from keras.preprocessing import image
 from scripts.visualisation_utils import plot_tracking_rect, show_precision
-OVERWRITE_RESULT = True
-DEBUG = True
+OVERWRITE_RESULT = False
+DEBUG = False
 
 
 class Tracker:
@@ -34,7 +34,8 @@ def main(argv):
                                adaptation_rate_range_max=0.0025,
                                adaptation_rate_scale_range_max=0.005,
                                padding=2.2,
-                               sub_sub_feature_type='adapted_lr_hdt')]
+                               sub_sub_feature_type='adapted_lr_hdt'
+                               )]
     else:
         trackers = [Tracker(name='KMC_multi_cnn')]
 
@@ -166,7 +167,7 @@ def run_KCF_variant(tracker, seq):
         if frame == start_frame:
             tracker.train(img_rgb, seq.gtRect[start_frame])
         else:
-            tracker.detect(img_rgb)
+            tracker.detect(img_rgb, frame)
 
         if DEBUG and frame > start_frame:
             print("Frame ==", frame)

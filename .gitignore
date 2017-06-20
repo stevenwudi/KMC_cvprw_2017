@@ -5,6 +5,7 @@
 data/
 checkpoints/
 results_OTB100/
+trained_models/
 
 step_2_CNN_CVPRW.py
 step_2_CNN_training_no_batchNorm.py

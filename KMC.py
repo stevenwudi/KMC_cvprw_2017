@@ -58,7 +58,6 @@ class KMCTracker:
         self.vert_delta = 0
         self.horiz_delta = 0
         # OBT dataset need extra definition
-        self.name = 'KCF_' + feature_type
         self.fps = -1
         self.res = []
         self.im_sz = []
@@ -162,7 +161,7 @@ class KMCTracker:
             self.lambda_scale = 1e-2
             self.adaptation_rate_scale = adaptation_rate_scale_range_max
 
-        if sub_sub_feature_type == 'adapted_lr' or sub_sub_feature_type == 'adapted_lr_hdt':
+        if sub_sub_feature_type == 'adapted_lr_hdt':
             self.sub_sub_feature_type = sub_sub_feature_type
             self.acc_time = acc_time
             self.loss = np.zeros(shape=(self.acc_time, 5))
@@ -170,15 +169,21 @@ class KMCTracker:
             self.loss_std = np.zeros(shape=(self.acc_time, 5))
             self.adaptation_rate_range = [adaptation_rate_range_max, 0.0]
             self.adaptation_rate_scale_range = [adaptation_rate_scale_range_max, 0.00]
-            self.adaptation_rate = self.adaptation_rate_range[0]
             self.adaptation_rate_scale = self.adaptation_rate_scale_range[0]
             self.stability = 1
-            if sub_sub_feature_type == 'adapted_lr_hdt':
-                self.adaptation_rate = np.ones(shape=(5)) * self.adaptation_rate_range[0]
+            self.adaptation_rate = np.ones(shape=(self.acc_time)) * self.adaptation_rate_range[0]
+
+            # store pre-computed cosine window, here is a multiscale CNN, here we have 5 layers cnn:
+            self.W = np.asarray([0.05, 0.1, 0.2, 0.5, 1])
+            self.W = self.W / np.sum(self.W)
+            self.R = np.zeros(shape=(len(self.W)))
+            self.loss = np.zeros(shape=(self.acc_time+1, len(self.W)))
 
         self.name = "KMC_" + self.feature_type
         self.name += "_" + self.sub_feature_type
-        self.name += "_" + name_suffix
+        self.name += "_" + self.sub_sub_feature_type
+        if name_suffix:
+            self.name += "_" + name_suffix
 
     def train(self, im, init_rect):
         """
@@ -234,7 +239,7 @@ class KMCTracker:
             self.sf_num = np.multiply(self.ysf[:, None], np.conj(self.xsf))
             self.sf_den = np.real(np.sum(np.multiply(self.xsf, np.conj(self.xsf)), axis=1))
 
-    def detect(self, im):
+    def detect(self, im, frame):
         """
         Note: we assume the target does not change in scale, hence there is no target size
         :param im: image should be of 3 dimension: M*N*C
@@ -316,14 +321,43 @@ class KMCTracker:
         x_new = self.get_features()
         xf_new = self.fft2(x_new)
         if self.feature_type == 'multi_cnn':
-            for i in range(len(x_new)):
-                #k = self.dense_gauss_kernel(self.feature_bandwidth_sigma * (self.sigma_coff**i), xf_new[i], x_new[i])
-                k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, xf_new[i], x_new[i])
-                kf = self.fft2(k)
-                alphaf_new = np.divide(self.yf[i], kf + self.lambda_value)
-                self.x[i] = (1 - self.adaptation_rate) * self.x[i] + self.adaptation_rate * x_new[i]
-                self.xf[i] = (1 - self.adaptation_rate) * self.xf[i] + self.adaptation_rate * xf_new[i]
-                self.alphaf[i] = (1 - self.adaptation_rate) * self.alphaf[i] + self.adaptation_rate * alphaf_new
+
+            if self.sub_sub_feature_type == 'adapted_lr_hdt':
+                self.response_max_list = []
+                for rm in self.response:
+                    row, col = rm.shape
+                    row_max = max(0, min((1. / 2 + pos_move[0][0]) * row, row - 1))
+                    col_max = max(0, min((1. / 2 + pos_move[0][1]) * col, col - 1))
+                    self.response_max_list.append(rm[int(row_max), int(col_max)])
+
+                loss_idx = np.mod(frame, self.acc_time)
+                self.loss[loss_idx] = np.asarray(self.max_list) - np.asarray(self.response_max_list)
+                self.loss_mean = np.mean(self.loss, axis=0)
+                self.loss_std = np.std(self.loss, axis=0)
+
+                if frame > self.acc_time:
+                    self.stability = np.abs(self.loss[loss_idx]-self.loss_mean) / (self.loss_std + np.finfo(np.float32).eps)
+                    # stability value is small(0), object is stable, adaptive learning rate is increased to maximum
+                    # stability value is big(1), object is not stable, adaptive learning rate is decreased to minimum
+                    self.adaptation_rate = self.stability*(self.adaptation_rate_range[0] - self.adaptation_rate_range[1])
+                    self.adaptation_rate_scale = self.stability.mean()*(self.adaptation_rate_scale_range[0] - self.adaptation_rate_scale_range[1])
+
+                for i in range(len(x_new)):
+                    k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, xf_new[i], x_new[i])
+                    kf = self.fft2(k)
+                    alphaf_new = np.divide(self.yf[i], kf + self.lambda_value)
+                    self.x[i] = (1 - self.adaptation_rate[i]) * self.x[i] + self.adaptation_rate[i] * x_new[i]
+                    self.xf[i] = (1 - self.adaptation_rate[i]) * self.xf[i] + self.adaptation_rate[i] * xf_new[i]
+                    self.alphaf[i] = (1 - self.adaptation_rate[i]) * self.alphaf[i] + self.adaptation_rate[i] * alphaf_new
+            else:
+                for i in range(len(x_new)):
+                    #k = self.dense_gauss_kernel(self.feature_bandwidth_sigma * (self.sigma_coff**i), xf_new[i], x_new[i])
+                    k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, xf_new[i], x_new[i])
+                    kf = self.fft2(k)
+                    alphaf_new = np.divide(self.yf[i], kf + self.lambda_value)
+                    self.x[i] = (1 - self.adaptation_rate) * self.x[i] + self.adaptation_rate * x_new[i]
+                    self.xf[i] = (1 - self.adaptation_rate) * self.xf[i] + self.adaptation_rate * xf_new[i]
+                    self.alphaf[i] = (1 - self.adaptation_rate) * self.alphaf[i] + self.adaptation_rate * alphaf_new
 
         elif self.feature_type == 'vgg':
             k = self.dense_gauss_kernel(self.feature_bandwidth_sigma, self.xf, self.x)

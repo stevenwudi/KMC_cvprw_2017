@@ -36,7 +36,11 @@ Backend: tensorflow
 	
 Test
 -------
-To reproduce the experimental result for test submission, there is a Python file:
+To reproduce the experimental result for test submission, you need to 
+ download the trained model from:
+ https://drive.google.com/open?id=0BzicoAl6Jud9WTNDS0RFUEpkQ1E
+
+there is a Python file:
 
 `....py` 
 

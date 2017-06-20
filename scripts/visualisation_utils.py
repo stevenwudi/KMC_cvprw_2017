@@ -117,7 +117,7 @@ def plot_tracking_rect(seqname, frame, img_rgb, tracker, gtRect, wait_second=0.0
         plt.imshow(make_mosaic(features[:16], 4, 4, border=1))
         plt.title('%s, FIRST conv.' % tracker.feature_type)
         if tracker.sub_sub_feature_type == 'adapted_lr_hdt':
-            plt.title("ALR: %s" % (', '.join("{0:.4f}".format(x) for x in tracker.adaptation_rate)))
+            plt.title("ALR:\n %s" % (', '.join("{0:.4f}".format(x) for x in tracker.adaptation_rate)))
     else:
         plt.imshow((tracker.x - tracker.x.min())/(tracker.x.max()-tracker.x.min()))
         plt.title('Feature used is %s' % tracker.feature_type)
